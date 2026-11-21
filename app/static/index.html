@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>静默规则首呼预演</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #181f2e; --panel2: #1f2839; --line: #2b3650;
+    --text: #e6ebf5; --muted: #93a0b8; --accent: #4f8cff;
+    --ok: #3fb96b; --warn: #e0a93b; --bad: #e5534b; --neutral: #7d8aa3;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:14px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { padding:20px 24px 60px; max-width:1280px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:980px){ .grid{grid-template-columns:1fr;} }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h2 { font-size:15px; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  .card h2 .tag { font-weight:400; font-size:12px; color:var(--muted); }
+  textarea { width:100%; min-height:220px; resize:vertical; background:#0c111c; color:var(--text);
+             border:1px solid var(--line); border-radius:8px; padding:10px;
+             font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; }
+  textarea:focus { outline:none; border-color:var(--accent); }
+  .params { display:flex; gap:14px; flex-wrap:wrap; align-items:end; margin-top:14px; }
+  .params label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .params input { background:#0c111c; color:var(--text); border:1px solid var(--line);
+                  border-radius:8px; padding:8px 10px; font-size:13px; width:230px; }
+  .btns { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
+  button { border:1px solid var(--line); background:var(--panel2); color:var(--text);
+           border-radius:8px; padding:9px 18px; cursor:pointer; font-size:14px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:hover { filter:brightness(1.12); }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  #error { display:none; background:#3a1d20; border:1px solid var(--bad); color:#ffb4b0;
+           padding:10px 14px; border-radius:8px; margin-bottom:14px; white-space:pre-wrap; }
+  .summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .pill { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+          padding:6px 14px; font-size:13px; }
+  .pill b { font-size:15px; margin-left:4px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; white-space:nowrap; }
+  .v-delayed   { background:#3a2f12; color:var(--warn); }
+  .v-suppressed{ background:#3a1d20; color:var(--bad); }
+  .v-unchanged { background:#16301f; color:var(--ok); }
+  .v-earlier, .v-newly_called { background:#14283d; color:var(--accent); }
+  .v-still_not_called { background:#262c38; color:var(--neutral); }
+  .notcalled { color:var(--bad); font-weight:600; }
+  .waiting-note { color:var(--warn); font-size:12px; display:block; margin-top:2px; }
+  .alerts-cell { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
+  details { margin-top:6px; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  .stretch { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:var(--muted); }
+  .empty { color:var(--muted); padding:24px; text-align:center; }
+  code { background:#0c111c; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>静默规则首呼预演</h1>
+  <span class="sub">同一服务未静默活动告警不断则首呼等待连续计时 · 断档重新等待 · 每轮故障只首呼一次</span>
+</header>
+<main>
+  <div class="grid">
+    <section class="card">
+      <h2>① 告警导入 <span class="tag">JSON 数组；recovered_at 可留 null</span></h2>
+      <textarea id="alerts" spellcheck="false"></textarea>
+      <p class="hint">字段：id / service / labels（对象）/ fired_at / recovered_at，时间用 ISO-8601（推荐带 Z 时区）。
+        也可 <label style="color:var(--accent);cursor:pointer">选择文件导入<input type="file" id="alertFile" accept=".json,application/json" hidden></label></p>
+    </section>
+    <section class="card">
+      <h2>② 现行静默规则 <span class="tag">全标签匹配，区间 [start_at, end_at)</span></h2>
+      <textarea id="current" spellcheck="false"></textarea>
+      <h2 style="margin-top:14px">③ 拟新增静默规则</h2>
+      <textarea id="proposed" spellcheck="false"></textarea>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <h2>④ 计时参数</h2>
+    <div class="params">
+      <label>首呼等待时长（分钟，&gt;0）
+        <input id="wait" type="number" step="0.5" min="0.1" value="10" />
+      </label>
+      <label>观察截止时间
+        <input id="cutoff" type="text" value="2026-11-21T12:00:00Z" />
+      </label>
+    </div>
+    <div class="btns">
+      <button class="primary" id="run">运行预演</button>
+      <button id="loadSample">重置并载入样例</button>
+    </div>
+    <p class="hint">同刻变化先一并生效再判定；观察截止时刻本身不再触发首呼（含恰好凑满等待的情形）。</p>
+  </section>
+
+  <div id="error"></div>
+  <div id="results" style="margin-top:18px"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const VERDICT_TEXT = {
+  delayed: "首呼推迟", suppressed: "新增静默后收不到首呼", unchanged: "无变化",
+  earlier: "首呼提前", newly_called: "新增静默后反而首呼", still_not_called: "前后均未首呼",
+};
+async function loadSample() {
+  const r = await fetch("/api/sample");
+  const s = await r.json();
+  $("alerts").value = JSON.stringify(s.alerts, null, 2);
+  $("current").value = JSON.stringify(s.current_silences, null, 2);
+  $("proposed").value = JSON.stringify(s.proposed_silences, null, 2);
+  $("wait").value = s.wait_minutes;
+  $("cutoff").value = s.cutoff_at;
+}
+function parseArea(id, name) {
+  const raw = $(id).value.trim();
+  if (!raw) return [];
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(name + " 不是合法 JSON：" + e.message); }
+}
+function fmt(t) { return t ? t.replace("T", " ").replace("Z", " UTC") : "—"; }
+function fmtDelay(sec) {
+  if (sec === null || sec === undefined) return "";
+  if (sec === 0) return "0 分钟";
+  const m = Math.round(sec / 60 * 10) / 10;
+  return "+" + m + " 分钟";
+}
+function callCell(res) {
+  if (!res.first_call_at) {
+    const note = res.still_waiting_at_cutoff
+      ? '<span class="waiting-note">截至观察结束仍在等待，未首呼</span>'
+      : '<span class="waiting-note">未首呼（未静默持续时长不足或全程被屏蔽）</span>';
+    return '<span class="notcalled">未首呼</span>' + note
+      + '<div class="alerts-cell" style="margin-top:4px">随呼告警：—</div>';
+  }
+  return '<strong>' + fmt(res.first_call_at) + '</strong>'
+    + '<div class="alerts-cell" style="margin-top:4px">随呼告警：'
+    + (res.called_alert_ids.join(", ") || "—") + '</div>';
+}
+function stretchDetails(res) {
+  if (!res.unsilenced_stretches.length)
+    return '<details><summary>未静默活动区间：无</summary></details>';
+  const rows = res.unsilenced_stretches.map(s =>
+    '<div class="stretch">[' + fmt(s.start) + ' → ' + fmt(s.end)
+    + (s.open_ended ? "（截止截断）" : "") + ')</div>').join("");
+  return '<details><summary>未静默活动区间（' + res.unsilenced_stretches.length + ' 段）</summary>'
+    + rows + '</details>';
+}
+function render(data) {
+  const s = data.summary;
+  const pills = [
+    ["故障轮次总数", s.total_rounds],
+    ["加静默前首呼", s.before_called],
+    ["加静默后首呼", s.after_called],
+    ["推迟", s.delayed, "var(--warn)"],
+    ["收不到（被压掉）", s.suppressed, "var(--bad)"],
+    ["无变化", s.unchanged, "var(--ok)"],
+    ["前后均未首呼", s.still_not_called],
+    ["加静默后未首呼合计", s.not_called_after, "var(--bad)"],
+  ];
+  let html = '<div class="summary">' + pills.map(p =>
+    '<span class="pill">' + p[0] + '<b style="color:' + (p[2] || "var(--text)") + '">' + p[1] + '</b></span>'
+  ).join("") + '</div>';
+  if (data.ignored_alerts_after_cutoff.length)
+    html += '<p class="hint">以下告警在观察截止之后才触发，已忽略：'
+      + data.ignored_alerts_after_cutoff.join(", ") + '</p>';
+  html += '<div class="card"><table><thead><tr>'
+    + '<th>服务 / 轮次</th><th>判定</th><th>推迟量</th>'
+    + '<th>加静默前：首呼时刻 + 随呼未静默活动告警</th>'
+    + '<th>加静默后：首呼时刻 + 随呼未静默活动告警</th>'
+    + '<th>轮次内告警</th></tr></thead><tbody>';
+  for (const r of data.rounds) {
+    html += '<tr>'
+      + '<td>' + r.service + '<br><span class="hint">第 ' + r.round_index + ' 轮 · '
+      + fmt(r.started_at) + ' → ' + fmt(r.ended_at) + (r.ended_at ? '' : '（未结束）') + '</span>'
+      + stretchDetails(r.before).replace("未静默活动区间", "加前未静默区间")
+      + stretchDetails(r.after).replace("未静默活动区间", "加后未静默区间")
+      + '</td>'
+      + '<td><span class="badge v-' + r.verdict + '">' + VERDICT_TEXT[r.verdict] + '</span></td>'
+      + '<td>' + (r.delay_seconds ? fmtDelay(r.delay_seconds) : "—") + '</td>'
+      + '<td>' + callCell(r.before) + '</td>'
+      + '<td>' + callCell(r.after) + '</td>'
+      + '<td class="alerts-cell">' + r.alert_ids.join("<br>") + '</td>'
+      + '</tr>';
+  }
+  html += '</tbody></table></div>';
+  $("results").innerHTML = html;
+}
+$("run").onclick = async () => {
+  $("error").style.display = "none";
+  try {
+    const body = {
+      alerts: parseArea("alerts", "告警数据"),
+      current_silences: parseArea("current", "现行静默规则"),
+      proposed_silences: parseArea("proposed", "拟新增静默规则"),
+      wait_minutes: parseFloat($("wait").value),
+      cutoff_at: $("cutoff").value.trim(),
+    };
+    const r = await fetch("/api/simulate", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
+    render(data);
+  } catch (e) {
+    $("error").textContent = e.message;
+    $("error").style.display = "block";
+  }
+};
+$("loadSample").onclick = loadSample;
+$("alertFile").onchange = async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  $("alerts").value = await f.text();
+};
+loadSample();
+</script>
+</body>
+</html>
